@@ -942,6 +942,39 @@ def ensure_executable_scripts(project_path: Path, tracker: StepTracker | None = 
             for f in failures:
                 console.print(f"  - {f}")
 
+def sync_codex_prompts_to_home(project_path: Path, tracker: StepTracker | None = None) -> None:
+    """Copy Codex prompt files into CODEX_HOME/prompts (fallback to ~/.codex)."""
+    codex_home = os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")
+
+    source_dir = project_path / ".codex" / "prompts"
+    if not source_dir.is_dir():
+        if tracker:
+            tracker.skip("codex-prompts", "no .codex/prompts found")
+        return
+
+    dest_dir = Path(codex_home).expanduser() / "prompts"
+    try:
+        if tracker:
+            tracker.start("codex-prompts")
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        copied = 0
+        for item in source_dir.rglob("*"):
+            if item.is_file():
+                rel_path = item.relative_to(source_dir)
+                target = dest_dir / rel_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(item, target)
+                copied += 1
+        if tracker:
+            tracker.complete("codex-prompts", f"copied {copied} file(s)")
+        else:
+            console.print(f"[cyan]Synced Codex prompts to {dest_dir} ({copied} file(s))[/cyan]")
+    except Exception as e:
+        if tracker:
+            tracker.error("codex-prompts", str(e))
+        else:
+            console.print(f"[yellow]Warning: failed to sync Codex prompts: {e}[/yellow]")
+
 @app.command()
 def init(
     project_name: str = typer.Argument(None, help="Name for your new project directory (optional if using --here, or use '.' for current directory)"),
@@ -1113,6 +1146,8 @@ def init(
         ("final", "Finalize")
     ]:
         tracker.add(key, label)
+    if selected_ai == "codex":
+        tracker.add("codex-prompts", "Sync Codex prompts to CODEX_HOME (fallback ~/.codex)")
 
     # Track git error message outside Live context so it persists
     git_error_message = None
@@ -1127,6 +1162,8 @@ def init(
             download_and_extract_template(project_path, selected_ai, selected_script, here, verbose=False, tracker=tracker, client=local_client, debug=debug, github_token=github_token)
 
             ensure_executable_scripts(project_path, tracker=tracker)
+            if selected_ai == "codex":
+                sync_codex_prompts_to_home(project_path, tracker=tracker)
 
             if not no_git:
                 tracker.start("git")
@@ -1207,14 +1244,9 @@ def init(
 
     # Add Codex-specific setup step if needed
     if selected_ai == "codex":
-        codex_path = project_path / ".codex"
-        quoted_path = shlex.quote(str(codex_path))
-        if os.name == "nt":  # Windows
-            cmd = f"setx CODEX_HOME {quoted_path}"
-        else:  # Unix-like systems
-            cmd = f"export CODEX_HOME={quoted_path}"
-        
-        steps_lines.append(f"{step_num}. Set [cyan]CODEX_HOME[/cyan] environment variable before running Codex: [cyan]{cmd}[/cyan]")
+        codex_home = os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")
+        codex_prompts = Path(codex_home).expanduser() / "prompts"
+        steps_lines.append(f"{step_num}. Codex prompts were synced to: [cyan]{codex_prompts}[/cyan]")
         step_num += 1
 
     steps_lines.append(f"{step_num}. Start using slash commands with your AI agent:")
@@ -1366,4 +1398,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
